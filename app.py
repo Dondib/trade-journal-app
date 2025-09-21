@@ -1,6 +1,6 @@
-import streamlit as st
-import pandas as pd
 import os
+import pandas as pd
+import streamlit as st
 from datetime import datetime
 import plotly.graph_objects as go
 import calendar
@@ -9,64 +9,81 @@ CSV_FILE = "trades.csv"
 INVEST_CSV = "investment.csv"
 
 def init_csv():
-    if not os.path.exists(CSV_FILE):
-        df = pd.DataFrame(columns=["Date", "Symbol", "Side", "Quantity", "Price", "Net P&L", "Pips"])
-        df.to_csv(CSV_FILE, index=False)
+    cols = ["Date", "Symbol", "Side", "Quantity", "Price", "Net P&L", "Pips"]
+    if not os.path.exists(CSV_FILE) or os.stat(CSV_FILE).st_size == 0:
+        pd.DataFrame(columns=cols).to_csv(CSV_FILE, index=False)
 
 def init_investment():
-    if not os.path.exists(INVEST_CSV):
-        pd.DataFrame([{"Date": datetime.today().strftime("%Y-%m-%d"), "Amount": 0.0}]).to_csv(INVEST_CSV, index=False)
+    if not os.path.exists(INVEST_CSV) or os.stat(INVEST_CSV).st_size == 0:
+        pd.DataFrame(columns=["Date", "Amount"]).to_csv(INVEST_CSV, index=False)
+
+def _safe_read(path, columns):
+    if not os.path.exists(path) or os.stat(path).st_size == 0:
+        return pd.DataFrame(columns=columns)
+    try:
+        return pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame(columns=columns)
 
 def get_investment():
-    df = pd.read_csv(INVEST_CSV)
-    return df["Amount"].sum()
+    df = _safe_read(INVEST_CSV, ["Date", "Amount"])
+    if df.empty:
+        return 0.0
+    # If you track cumulative investment as sum of Amount entries:
+    try:
+        return float(df["Amount"].astype(float).sum())
+    except Exception:
+        return 0.0
 
 def add_investment(amount):
-    df = pd.read_csv(INVEST_CSV)
-    df = pd.concat([df, pd.DataFrame([{"Date": datetime.today().strftime("%Y-%m-%d"), "Amount": amount}])], ignore_index=True)
+    df = _safe_read(INVEST_CSV, ["Date", "Amount"])
+    row = {"Date": datetime.today().strftime("%Y-%m-%d"), "Amount": float(amount)}
+    df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
     df.to_csv(INVEST_CSV, index=False)
 
 def add_trade_form():
-    with st.form("trade_form"):
+    # minimal, non-destructive form logic — returns dict or None
+    with st.form("add_trade"):
         date = st.date_input("Date", value=datetime.today())
-        symbol = st.text_input("Symbol", key="symbol", max_chars=10)
-        side = st.selectbox("Side", ["Buy", "Sell"], key="side")
-        quantity = st.text_input("Quantity", key="quantity", max_chars=10)
-        price = st.text_input("Price", key="price", max_chars=10)
-        pnl = st.text_input("Net P&L", key="pnl", max_chars=10)
-        pips = st.text_input("Pips", key="pips", max_chars=10)  # <-- New field
+        symbol = st.text_input("Symbol", max_chars=10)
+        side = st.selectbox("Side", ["Buy", "Sell"])
+        quantity = st.text_input("Quantity")
+        price = st.text_input("Price")
+        pnl = st.text_input("Net P&L")
+        pips = st.text_input("Pips")
         submitted = st.form_submit_button("Add Trade")
         if submitted:
             try:
-                quantity_val = float(quantity)
-                price_val = float(price)
-                pnl_val = float(pnl)
-                pips_val = float(pips)
                 return {
                     "Date": date.strftime("%Y-%m-%d"),
                     "Symbol": symbol,
                     "Side": side,
-                    "Quantity": quantity_val,
-                    "Price": price_val,
-                    "Net P&L": pnl_val,
-                    "Pips": pips_val
+                    "Quantity": float(quantity) if quantity else 0.0,
+                    "Price": float(price) if price else 0.0,
+                    "Net P&L": float(pnl) if pnl else 0.0,
+                    "Pips": float(pips) if pips else 0.0
                 }
             except ValueError:
-                st.error("Please enter valid numbers for Quantity, Price, Net P&L, and Pips.")
+                st.error("Please enter valid numbers for Quantity, Price, P&L and Pips.")
     return None
 
 def save_trade(trade_data):
-    df = pd.read_csv(CSV_FILE)
+    df = _safe_read(CSV_FILE, ["Date", "Symbol", "Side", "Quantity", "Price", "Net P&L", "Pips"])
     df = pd.concat([df, pd.DataFrame([trade_data])], ignore_index=True)
     df.to_csv(CSV_FILE, index=False)
-    # --- Update investment automatically ---
-    add_investment(trade_data["Net P&L"])
+    # update investment by adding P&L (wins increase, losses decrease)
+    try:
+        pnl = float(trade_data.get("Net P&L", 0))
+        if pnl != 0:
+            add_investment(pnl)
+    except Exception:
+        pass
 
 def load_trades():
-    return pd.read_csv(CSV_FILE)
+    return _safe_read(CSV_FILE, ["Date", "Symbol", "Side", "Quantity", "Price", "Net P&L", "Pips"])
 
 def load_investments():
-    return pd.read_csv(INVEST_CSV)
+    return _safe_read(INVEST_CSV, ["Date", "Amount"])
 
 def save_investments(df):
     df.to_csv(INVEST_CSV, index=False)
@@ -97,15 +114,30 @@ def investment_edit_form(row):
     return None
 
 def calculate_statistics():
-    df = pd.read_csv(CSV_FILE)
-    stats = {
-        "Total Trades": len(df),
-        "Total P&L": df["Net P&L"].sum(),
-        "Win Rate": (df["Net P&L"] > 0).mean() * 100 if len(df) > 0 else 0,
-        "Avg Win": df[df["Net P&L"] > 0]["Net P&L"].mean() if (df["Net P&L"] > 0).any() else 0,
-        "Avg Loss": df[df["Net P&L"] < 0]["Net P&L"].mean() if (df["Net P&L"] < 0).any() else 0,
+    # Use the safe loader to avoid EmptyDataError on empty/missing CSV
+    trades = load_trades()
+    if trades.empty:
+        return {
+            "Total Trades": 0,
+            "Total P&L": 0.0,
+            "Win Rate": 0.0,
+            "Avg Win": 0.0,
+            "Avg Loss": 0.0,
+        }
+
+    total_trades = len(trades)
+    total_pnl = trades["Net P&L"].sum()
+    win_rate = (trades["Net P&L"] > 0).mean() * 100 if total_trades > 0 else 0
+    avg_win = trades[trades["Net P&L"] > 0]["Net P&L"].mean() if (trades["Net P&L"] > 0).any() else 0
+    avg_loss = trades[trades["Net P&L"] < 0]["Net P&L"].mean() if (trades["Net P&L"] < 0).any() else 0
+
+    return {
+        "Total Trades": total_trades,
+        "Total P&L": total_pnl,
+        "Win Rate": win_rate,
+        "Avg Win": avg_win,
+        "Avg Loss": avg_loss,
     }
-    return stats
 
 def display_statistics(stats):
     st.metric("Total Trades", stats["Total Trades"])
@@ -442,6 +474,14 @@ def trading_calendar(trades):
                         unsafe_allow_html=True
                     )
 
+def safe_read_csv(path, columns):
+    if not os.path.exists(path) or os.stat(path).st_size == 0:
+        return pd.DataFrame(columns=columns)
+    try:
+        return pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame(columns=columns)
+
 def main():
     st.set_page_config(page_title="Personal Trading Journal", layout="wide")
     st.markdown(
@@ -450,12 +490,6 @@ def main():
     )
     init_csv()
     init_investment()
-
-    # --- Ensure 'Pips' column exists in trades.csv ---
-    trades = pd.read_csv(CSV_FILE)
-    if "Pips" not in trades.columns:
-        trades["Pips"] = ""
-        trades.to_csv(CSV_FILE, index=False)
 
     # --- Investment Adjustment Section ---
     st.markdown("## 💰 Investment Adjustment")
