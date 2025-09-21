@@ -1,1 +1,1 @@
-# trade-journal-app
+# Trade-journal-app
