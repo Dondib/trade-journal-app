@@ -1,4 +1,5 @@
 import os
+import shutil
 import pandas as pd
 import streamlit as st
 from datetime import datetime
@@ -67,7 +68,13 @@ def add_trade_form():
                 st.error("Please enter valid numbers for Quantity, Price, P&L and Pips.")
     return None
 
+def backup_file(file_path):
+    if os.path.exists(file_path) and os.stat(file_path).st_size > 0:
+        backup_path = file_path + ".bak"
+        shutil.copy2(file_path, backup_path)
+
 def save_trade(trade_data):
+    backup_file(CSV_FILE)
     df = _safe_read(CSV_FILE, ["Date", "Symbol", "Side", "Quantity", "Price", "Net P&L", "Pips"])
     df = pd.concat([df, pd.DataFrame([trade_data])], ignore_index=True)
     df.to_csv(CSV_FILE, index=False)
@@ -86,6 +93,10 @@ def load_investments():
     return _safe_read(INVEST_CSV, ["Date", "Amount"])
 
 def save_investments(df):
+    investments_df.iloc[st.session_state['edit_invest_row']] = updated
+    for col in investments_df.columns:
+        investments_df.at[st.session_state['edit_invest_row'], col] = updated[col]
+    backup_file(INVEST_CSV)
     df.to_csv(INVEST_CSV, index=False)
 
 def display_investments_table(df):
@@ -428,7 +439,10 @@ def trading_calendar(trades):
         index=len(months)-1,
         key="trading_calendar_month"
     )
-    year, month = map(int, selected_month.split('-'))
+    if selected_month:
+        year, month = map(int, selected_month.split('-'))
+    else:
+        year, month = datetime.today().year, datetime.today().month
 
     # Prepare daily P&L
     month_trades = trades[trades["Date"].dt.strftime("%Y-%m") == selected_month]
@@ -519,6 +533,8 @@ def main():
         updated = investment_edit_form(row)
         if updated:
             investments_df.iloc[st.session_state['edit_invest_row']] = updated
+            for col in investments_df.columns:
+                investments_df.at[st.session_state['edit_invest_row'], col] = updated[col]
             save_investments(investments_df)
             del st.session_state['edit_invest_row']
             st.success("Investment updated!")
@@ -609,6 +625,8 @@ def main():
         updated = trade_edit_form(row)
         if updated:
             trades.iloc[st.session_state['edit_trade_row']] = updated
+            for col in trades.columns:
+                trades.at[st.session_state['edit_trade_row'], col] = updated[col]
             trades.to_csv(CSV_FILE, index=False)
             del st.session_state['edit_trade_row']
             st.success("Trade updated!")
