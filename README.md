@@ -1,6 +1,5 @@
 # DD_ TRADING — Personal Trade Journal
 
-![Dashboard Screenshot](assets/dashboard_sample.png)
 
 Short presentation script
 - Intro: "DD_ TRADING is a Streamlit-based personal trading journal that records trades, auto-updates investment, and visualizes performance."
